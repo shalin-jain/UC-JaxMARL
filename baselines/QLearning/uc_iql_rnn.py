@@ -256,6 +256,11 @@ def make_train(config, env):
             network_params_i = network_i.init(rng, init_hs, *init_x_i)
             network_params_c = network_c.init(rng, init_hs, *init_x_c)
 
+            # log param count
+            param_count_i = sum(x.size for x in jax.tree_util.tree_leaves(network_params_i))
+            param_count_c = sum(x.size for x in jax.tree_util.tree_leaves(network_params_c))
+            wandb.log({"agent_param_count": param_count_i+param_count_c})
+
             lr_scheduler = optax.linear_schedule(
                 init_value=config["LR"],
                 end_value=1e-10,

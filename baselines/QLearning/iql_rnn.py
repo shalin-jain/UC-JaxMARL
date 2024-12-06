@@ -181,6 +181,10 @@ def make_train(config, env):
             )  # (batch_size, hidden_dim)
             network_params = network.init(rng, init_hs, *init_x)
 
+            # log param count
+            param_count = sum(x.size for x in jax.tree_util.tree_leaves(network_params))
+            wandb.log({"agent_param_count": param_count})
+
             lr_scheduler = optax.linear_schedule(
                 init_value=config["LR"],
                 end_value=1e-10,
@@ -665,7 +669,7 @@ def tune(default_config):
 
     default_config = {**default_config, **default_config["alg"]}  # merge the alg config with the main config
     env_name = default_config["ENV_NAME"]
-    alg_name = default_config.get("ALG_NAME", "iql_rnn") 
+    alg_name = default_config.get("ALG_NAME", "iql_rnn")
     env, env_name = env_from_config(default_config)
 
     def wrapped_make_train():
