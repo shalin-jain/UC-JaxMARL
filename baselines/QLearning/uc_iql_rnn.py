@@ -184,14 +184,23 @@ def make_train(config, env):
             q_act_i = jnp.take_along_axis(q_vals_i, act_i, axis=-1).squeeze(-1)
             q_act_c = jnp.take_along_axis(q_vals_c, act_c, axis=-1).squeeze(-1)
 
-            # get probability of selecting action `act_i`
+            # Assume initially both actions are equally weighted w [1,1].
+            # diff > 0, w [1, 1 + diff]
+            # diff <= 0, w [1 - diff, 1]
             diff = q_act_c - q_act_i
-            normalized_diff = (diff - diff.min()) / (diff.max() - diff.min() + 1e-8)  # normalize
-            p = 0.5 - normalized_diff
+            w_i = jnp.ones_like(diff)
+            w_c = jnp.ones_like(diff)
+            w_c = jnp.where(diff > 0, 1 + diff, 1)
+            w_i = jnp.where(diff <= 0, 1 - diff, 1)
+
+            # normalize weights so that w[0] + w[1] = 1
+            w_sum = w_i + w_c
+            w_i /= w_sum
+            w_c /= w_sum
 
             # choose act_i if random value is less than prob_i
-            random_vals = jax.random.uniform(rng, shape=p.shape)
-            selected_actions = jnp.where(random_vals < p, act_i.squeeze(-1), act_c.squeeze(-1))
+            random_vals = jax.random.uniform(rng, shape=w_i.shape)
+            selected_actions = jnp.where(random_vals < w_i, act_i.squeeze(-1), act_c.squeeze(-1))
 
             return selected_actions
 
@@ -368,13 +377,26 @@ def make_train(config, env):
                     axis=1
                 )  # (num_agents, num_envs, num_actions) remove the time dim
 
+                # get q vals for frozen intention q network
+                _, q_vals_fi = jax.vmap(
+                    network_i.apply, in_axes=(None, 0, 0, 0)
+                )(  # vmap across the agent dim
+                    train_state_i.target_network_params,
+                    hs_i,
+                    _obs,
+                    _dones,
+                )
+                q_vals_fi = q_vals_fi.squeeze(
+                    axis=1
+                )  # (num_agents, num_envs, num_actions) remove the time dim
+
                 # get q vals for cf q network
                 new_hs_c, q_vals_c = jax.vmap(
                     network_c.apply, in_axes=(None, 0, 0, 0)
                 )(  # vmap across the agent dim
                     train_state_c.params,
                     hs_c,
-                    jnp.concatenate([_obs, q_vals_i[:, np.newaxis]], axis=-1), # condition on both observation and intention network q vals
+                    jnp.concatenate([_obs, q_vals_fi[:, np.newaxis]], axis=-1), # condition on both observation and intention network q vals
                     _dones,
                 )
                 q_vals_c = q_vals_c.squeeze(
@@ -390,14 +412,14 @@ def make_train(config, env):
                     _rngs, q_vals_i, q_vals_c, eps, batchify(avail_actions)
                 )
                 actions = unbatchify(actions)
-                q_vals_i = unbatchify(q_vals_i)
+                q_vals_fi = unbatchify(q_vals_fi)
 
                 new_obs, new_env_state, rewards, dones, infos = wrapped_env.batch_step(
                     rng_s, env_state, actions
                 )
                 timestep = Timestep(
                     obs=last_obs,
-                    actions_i=q_vals_i,
+                    actions_i=q_vals_fi,
                     actions=actions,
                     rewards=jax.tree_map(lambda x:config.get("REW_SCALE", 1)*x, rewards),
                     dones=dones,
@@ -649,6 +671,9 @@ def make_train(config, env):
             # UPDATE METRICS
             train_state_i = train_state_i.replace(n_updates=train_state_i.n_updates + 1)
             train_state_c = train_state_c.replace(n_updates=train_state_c.n_updates + 1)
+            act_i = jnp.argmax(qvals_i, axis=-1)
+            act_c = jnp.argmax(qvals_c, axis=-1)
+            act_mismatch = act_i != act_c
             metrics = {
                 "env_step": train_state_i.timesteps,
                 "update_steps": train_state_i.n_updates,
@@ -657,6 +682,7 @@ def make_train(config, env):
                 "loss_c": loss_c.mean(),
                 "qvals_i": qvals_i.mean(),
                 "qvals_c": qvals_c.mean(),
+                "act_mismatch": act_mismatch.mean(),
             }
             metrics.update(jax.tree_map(lambda x: x.mean(), infos))
             if config.get("LOG_AGENTS_SEPARATELY", False):
@@ -708,17 +734,24 @@ def make_train(config, env):
                 rng, key_s = jax.random.split(rng)
                 _obs = batchify(last_obs)[:, np.newaxis]
                 _dones = batchify(last_dones)[:, np.newaxis]
-                hstate_i, q_vals_i = jax.vmap(network_i.apply, in_axes=(None, 0, 0, 0))(
+                new_hstate_i, q_vals_i = jax.vmap(network_i.apply, in_axes=(None, 0, 0, 0))(
                     params_i,
                     hstate_i,
                     _obs,
                     _dones,
                 )
                 q_vals_i = q_vals_i.squeeze(axis=1)
-                hstate_c, q_vals_c = jax.vmap(network_c.apply, in_axes=(None, 0, 0, 0))(
+                _, q_vals_fi = jax.vmap(network_i.apply, in_axes=(None, 0, 0, 0))(
+                    train_state_i.target_network_params,
+                    hstate_i,
+                    _obs,
+                    _dones,
+                )
+                q_vals_fi = q_vals_fi.squeeze(axis=1)
+                new_hstate_c, q_vals_c = jax.vmap(network_c.apply, in_axes=(None, 0, 0, 0))(
                     params_c,
                     hstate_c,
-                    jnp.concatenate([_obs, q_vals_i[:, np.newaxis]], axis=-1),
+                    jnp.concatenate([_obs, q_vals_fi[:, np.newaxis]], axis=-1),
                     _dones,
                 )
                 q_vals_c = q_vals_c.squeeze(axis=1)
@@ -728,7 +761,7 @@ def make_train(config, env):
                 obs, env_state, rewards, dones, infos = test_env.batch_step(
                     key_s, env_state, actions
                 )
-                step_state = (params_i, params_c, env_state, obs, dones, hstate_i, hstate_c, rng)
+                step_state = (params_i, params_c, env_state, obs, dones, new_hstate_i, new_hstate_c, rng)
                 return step_state, (rewards, dones, infos)
 
             rng, _rng = jax.random.split(rng)
