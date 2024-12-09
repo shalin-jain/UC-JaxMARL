@@ -120,34 +120,6 @@ def make_train(config, env):
         q_vals = q_vals - (unavail_actions * 1e10)
         return jnp.argmax(q_vals, axis=-1)
 
-    # epsilon-greedy exploration
-    def eps_greedy_exploration(rng, q_vals, eps, valid_actions):
-
-        rng_a, rng_e = jax.random.split(
-            rng
-        )  # a key for sampling random actions and one for picking
-
-        greedy_actions = get_greedy_actions(q_vals, valid_actions)
-
-        # pick random actions from the valid actions
-        def get_random_actions(rng, val_action):
-            return jax.random.choice(
-                rng,
-                jnp.arange(val_action.shape[-1]),
-                p=val_action * 1.0 / jnp.sum(val_action, axis=-1),
-            )
-
-        _rngs = jax.random.split(rng_a, valid_actions.shape[0])
-        random_actions = jax.vmap(get_random_actions)(_rngs, valid_actions)
-
-        chosed_actions = jnp.where(
-            jax.random.uniform(rng_e, greedy_actions.shape)
-            < eps,  # pick the actions that should be random
-            random_actions,
-            greedy_actions,
-        )
-        return chosed_actions
-
     def get_cf_greedy_actions(q_vals_i, q_vals_c, valid_actions):
         # mask unavailable actions
         unavail_actions = 1 - valid_actions
@@ -163,6 +135,34 @@ def make_train(config, env):
         greedy_actions = jnp.argmax(max_q_vals, axis=-1)
 
         return act_i, act_c, greedy_actions
+
+    # epsilon-greedy exploration
+    def eps_greedy_exploration(rng, q_vals_i, q_vals_c, eps, valid_actions):
+
+        rng_a, rng_e = jax.random.split(
+            rng
+        )  # a key for sampling random actions and one for picking
+
+        act_i, act_c, cf_greedy_actions = get_cf_greedy_actions(q_vals_i, q_vals_c, valid_actions)
+
+        # pick random actions from the valid actions
+        def get_random_actions(rng, val_action):
+            return jax.random.choice(
+                rng,
+                jnp.arange(val_action.shape[-1]),
+                p=val_action * 1.0 / jnp.sum(val_action, axis=-1),
+            )
+
+        _rngs = jax.random.split(rng_a, valid_actions.shape[0])
+        random_actions = jax.vmap(get_random_actions)(_rngs, valid_actions)
+
+        chosed_actions = jnp.where(
+            jax.random.uniform(rng_e, cf_greedy_actions.shape)
+            < eps,  # pick the actions that should be random
+            random_actions,
+            cf_greedy_actions,
+        )
+        return chosed_actions, act_i
 
     # uc exploration
     def uc_eps_greedy_exploration(rng, q_vals_i, q_vals_c, eps, valid_actions):
@@ -408,9 +408,14 @@ def make_train(config, env):
 
                 eps = eps_scheduler(train_state_i.n_updates)
                 _rngs = jax.random.split(rng_a, env.num_agents)
-                actions, actions_i = jax.vmap(uc_eps_greedy_exploration, in_axes=(0, 0, 0, None, 0))(
-                    _rngs, q_vals_i, q_vals_c, eps, batchify(avail_actions)
-                )
+                if config["EXP_MODE"] == "uc":
+                    actions, actions_i = jax.vmap(uc_eps_greedy_exploration, in_axes=(0, 0, 0, None, 0))(
+                        _rngs, q_vals_i, q_vals_c, eps, batchify(avail_actions)
+                    )
+                else:
+                    actions, actions_i = jax.vmap(eps_greedy_exploration, in_axes=(0, 0, 0, None, 0))(
+                        _rngs, q_vals_i, q_vals_c, eps, batchify(avail_actions)
+                    )
                 actions = unbatchify(actions)
                 q_vals_fi = unbatchify(q_vals_fi)
 
