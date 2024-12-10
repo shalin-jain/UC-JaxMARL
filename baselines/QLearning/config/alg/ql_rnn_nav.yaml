@@ -1,7 +1,7 @@
 # valid for iql, vdn, qmix
 "TOTAL_TIMESTEPS": 2e6
 "NUM_ENVS": 8
-"NUM_STEPS": 26
+"NUM_STEPS": 50
 "BUFFER_SIZE": 5000
 "BUFFER_BATCH_SIZE": 32
 "HIDDEN_SIZE": 64
@@ -30,7 +30,7 @@
     "fill": 0.0
     "sample_test_case_type": "biased"
     "intersection_p": 0.2
-    # "test_intersection_p": 0.5
+    "test_intersection_p": 0.5
 
 # evaluate
 "TEST_DURING_TRAINING": True

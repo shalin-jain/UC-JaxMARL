@@ -159,7 +159,7 @@ def make_train(config, env, test_env):
         original_seed = rng[0]
         rng, _rng = jax.random.split(rng)
         wrapped_env = CTRolloutManager(env, batch_size=config["NUM_ENVS"])
-        test_env = CTRolloutManager(
+        wrapped_test_env = CTRolloutManager(
             test_env, batch_size=config["TEST_NUM_ENVS"]
         )  # batched env for testing (has different batch size)
 
@@ -515,17 +515,17 @@ def make_train(config, env, test_env):
                     _dones,
                 )
                 q_vals = q_vals.squeeze(axis=1)
-                valid_actions = test_env.get_valid_actions(env_state.env_state)
+                valid_actions = wrapped_test_env.get_valid_actions(env_state.env_state)
                 actions = get_greedy_actions(q_vals, batchify(valid_actions))
                 actions = unbatchify(actions)
-                obs, env_state, rewards, dones, infos = test_env.batch_step(
+                obs, env_state, rewards, dones, infos = wrapped_test_env.batch_step(
                     key_s, env_state, actions
                 )
                 step_state = (params, env_state, obs, dones, hstate, rng)
                 return step_state, (rewards, dones, infos)
 
             rng, _rng = jax.random.split(rng)
-            init_obs, env_state = test_env.batch_reset(_rng)
+            init_obs, env_state = wrapped_test_env.batch_reset(_rng)
             init_dones = {
                 agent: jnp.zeros((config["TEST_NUM_ENVS"]), dtype=bool)
                 for agent in env.agents + ["__all__"]
@@ -613,7 +613,7 @@ def env_from_config(config):
     elif "jaxnav" in env_name.lower():
         env = make(config["ENV_NAME"], **config["ENV_KWARGS"])
         env = LogWrapper(env)
-        config["ENV_KWARGS"]["map_params"]["intersection_p"] = config["ENV_KWARGS"]["map_params"]["test_intersection_p"]
+        # config["ENV_KWARGS"]["map_params"]["intersection_p"] = config["ENV_KWARGS"]["map_params"]["test_intersection_p"]
         test_env = make(config["ENV_NAME"], **config["ENV_KWARGS"])
         test_env = LogWrapper(test_env)
     else:
@@ -648,7 +648,7 @@ def single_run(config):
     rng = jax.random.PRNGKey(config["SEED"])
 
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
-    train_vjit = jax.jit(jax.vmap(make_train(config, env)))
+    train_vjit = jax.jit(jax.vmap(make_train(config, env, test_env)))
     outs = jax.block_until_ready(train_vjit(rngs))
 
     # save params

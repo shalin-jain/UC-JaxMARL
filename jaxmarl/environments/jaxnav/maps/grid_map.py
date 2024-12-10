@@ -49,6 +49,7 @@ class GridMapCircleAgents(Map):
         idxs = jnp.arange(-self.circle_check_window-1, self.circle_check_window+1)
         self.cc_x_idx, self.cc_y_idx = jnp.meshgrid(idxs, idxs)
         self.cell_half_height = self.cell_size / 2
+        self.intersection_p = map_kwargs.get("insersection_p", 0.5)
 
         # determine max number of blocks
         if sample_test_case_type == 'random':
@@ -57,7 +58,6 @@ class GridMapCircleAgents(Map):
             self.sample_test_case_type = SampleTestCaseTypes.GRID
         elif sample_test_case_type == 'biased':
             self.sample_test_case_type = SampleTestCaseTypes.BIASED
-            self.intersection_p = map_kwargs.get("insersection_p", 0.5)
         else:
             raise ValueError(f"Invalid sample_test_case_type: {sample_test_case_type}")
         self.fill = fill
@@ -188,7 +188,7 @@ class GridMapCircleAgents(Map):
                 5. check if start and goal are too close
                 """
 
-                key, pair, case = val
+                key, pair, case, iters = val
                 temp_case = case.at[i].set(pair+self.rad*3)  # ensure no conflict
 
                 map_collisions = jnp.any(jax.vmap(self.check_circle_map_collision, in_axes=[0, None, 0])(pair[:, :2], map_data, radii))
@@ -216,8 +216,11 @@ class GridMapCircleAgents(Map):
 
                     return jnp.logical_and(intersect1, intersect2)
 
-                path_intersections = jnp.any(jax.vmap(check_path_intersection)(temp_case, valid_mask))
-                path_intersections = jnp.where(intersect, path_intersections, ~path_intersections)
+                has_intersection = jnp.any(jax.vmap(check_path_intersection)(temp_case, valid_mask))
+                has_entry = jnp.any(valid_mask)
+
+                # stop caring about path intersections after 100 iters
+                path_intersections = jnp.where(jnp.logical_and(intersect, has_entry), ~has_intersection, has_intersection) | iters < 100
 
                 check = map_collisions | agent_collisions | too_close | path_intersections
 
@@ -229,21 +232,23 @@ class GridMapCircleAgents(Map):
 
             def _body_pos(val):
                 """ Sample a start and goal pair """
-                key, pair, case = val
+                key, pair, case, iters = val
                 key, key_point = jax.random.split(key)
                 pair = _sample_pair(key_point)
                 case = case.at[i].set(pair)
+                iters = iters + 1
                 #jax.debug.print('case {c}', c=case)
-                return key, pair, case
+                return key, pair, case, iters
 
             key, key_point = jax.random.split(key)
             pair = _sample_pair(key_point)
             case = case.at[i].set(pair)
+            iters = 0
 
-            key, pair, case = jax.lax.while_loop(
+            key, pair, case, iters = jax.lax.while_loop(
                 _cond_pos,
                 _body_pos,
-                (key, pair, case),
+                (key, pair, case, iters),
             )
             valid_mask = valid_mask.at[i].set(True)
             i += 1
