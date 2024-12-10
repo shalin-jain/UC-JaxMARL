@@ -103,7 +103,7 @@ class CustomTrainState(TrainState):
     grad_steps: int = 0
 
 
-def make_train(config, env):
+def make_train(config, env, test_env):
 
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
@@ -227,7 +227,7 @@ def make_train(config, env):
         rng, _rng = jax.random.split(rng)
         wrapped_env = CTRolloutManager(env, batch_size=config["NUM_ENVS"])
         test_env = CTRolloutManager(
-            env, batch_size=config["TEST_NUM_ENVS"]
+            test_env, batch_size=config["TEST_NUM_ENVS"]
         )  # batched env for testing (has different batch size)
 
         # INIT I AND C NETWORKS AND OPTIMIZERS
@@ -844,6 +844,8 @@ def env_from_config(config):
         env_name = f"{config['ENV_NAME']}_{config['MAP_NAME']}"
         env = make(config["ENV_NAME"], **config["ENV_KWARGS"])
         env = SMAXLogWrapper(env)
+        test_env = make(config["ENV_NAME"], **config["ENV_KWARGS"])
+        test_env = SMAXLogWrapper(test_env)
     # overcooked needs a layout
     elif "overcooked" in env_name.lower():
         env_name = f"{config['ENV_NAME']}_{config['ENV_KWARGS']['layout']}"
@@ -855,10 +857,18 @@ def env_from_config(config):
     elif "mpe" in env_name.lower():
         env = make(config["ENV_NAME"], **config["ENV_KWARGS"])
         env = MPELogWrapper(env)
+    elif "jaxnav" in env_name.lower():
+        env = make(config["ENV_NAME"], **config["ENV_KWARGS"])
+        env = LogWrapper(env)
+        config["ENV_KWARGS"]["map_params"]["intersection_p"] = config["ENV_KWARGS"]["map_params"]["test_intersection_p"]
+        test_env = make(config["ENV_NAME"], **config["ENV_KWARGS"])
+        test_env = LogWrapper(test_env)
     else:
         env = make(config["ENV_NAME"], **config["ENV_KWARGS"])
         env = LogWrapper(env)
-    return env, env_name
+        test_env = make(config["ENV_NAME"], **config["ENV_KWARGS"])
+        test_env = LogWrapper(env)
+    return env, test_env, env_name
 
 
 def single_run(config):
@@ -867,7 +877,7 @@ def single_run(config):
     print("Config:\n", OmegaConf.to_yaml(config))
 
     alg_name = config.get("ALG_NAME", "uc_iql_rnn")
-    env, env_name= env_from_config(copy.deepcopy(config))
+    env, test_env, env_name= env_from_config(copy.deepcopy(config))
 
     wandb.init(
         entity=config["ENTITY"],
@@ -885,7 +895,7 @@ def single_run(config):
     rng = jax.random.PRNGKey(config["SEED"])
 
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
-    train_vjit = jax.jit(jax.vmap(make_train(config, env)))
+    train_vjit = jax.jit(jax.vmap(make_train(config, env, test_env)))
     outs = jax.block_until_ready(train_vjit(rngs))
 
     # save params

@@ -310,7 +310,7 @@ class JaxNav(MultiAgentEnv):
             agent_c = jnp.sum(agent_c)
             map_c = jnp.sum(map_c)
             time_o = jnp.sum(time_o)
-            term = {a: old_done[i] for i, a in enumerate(self.agents)}
+            term = {a: jnp.repeat(old_done[i], self.num_agents, axis=-1) for i, a in enumerate(self.agents)}
         else:
             num_c = jnp.full((self.num_agents,), ep_done, dtype=jnp.int32)
             rew_info = rew_batch
@@ -318,13 +318,13 @@ class JaxNav(MultiAgentEnv):
 
         info = {
             # outcomes
-            "NumC": jnp.repeat(num_c[:, :, jnp.newaxis], self.num_agents, axis=2),
-            "GoalR": jnp.repeat(goal_r[:, :, jnp.newaxis], self.num_agents, axis=2),
-            "AgentC": jnp.repeat(agent_c[:, :, jnp.newaxis], self.num_agents, axis=2),
-            "MapC": jnp.repeat(map_c[:, :, jnp.newaxis], self.num_agents, axis=2),
-            "TimeO": jnp.repeat(time_o[:, :, jnp.newaxis], self.num_agents, axis=2),
-            "Return": jnp.repeat(rew_info[:, :, jnp.newaxis], self.num_agents, axis=2),
-            "terminated": jnp.repeat(term[:, :, jnp.newaxis], self.num_agents, axis=2),
+            "NumC": jnp.repeat(num_c, self.num_agents, axis=-1),
+            "GoalR": jnp.repeat(goal_r, self.num_agents, axis=-1),
+            "AgentC": jnp.repeat(agent_c, self.num_agents, axis=-1),
+            "MapC": jnp.repeat(map_c, self.num_agents, axis=-1),
+            "TimeO": jnp.repeat(time_o, self.num_agents, axis=-1),
+            "Return": jnp.repeat(rew_info, self.num_agents, axis=-1),
+            "terminated": term,
         }
         if self.do_sep_reward:
             raise NotImplementedError("Separate reward not implemented")
