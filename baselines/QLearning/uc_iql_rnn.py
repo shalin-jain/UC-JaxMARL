@@ -971,6 +971,9 @@ def main(config):
     else:
         single_run(config)
 
+    # force multiruns to finish correctly
+    wandb.finish()
+
 
 if __name__ == "__main__":
     main()
